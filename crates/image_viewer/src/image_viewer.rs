@@ -23,6 +23,11 @@ use project::{
     ImageItem, Project, ProjectPath, git_store::GitStoreEvent,
     image_store::{ImageItemEvent, PdfPageEntry, PdfPageInfo},
 };
+use kkpdf_zed::{
+    cache::{CacheKey, CacheablePage, PageLruCache, DEFAULT_MEMORY_BUDGET_BYTES},
+    rasterizer::RasterizerOptions,
+    PdfiumEngine,
+};
 use settings::Settings;
 use theme_settings::ThemeSettings;
 use ui::{
@@ -104,6 +109,18 @@ impl PdfSelection {
     }
 }
 
+#[derive(Clone)]
+pub struct CachedPageImage {
+    pub image: Arc<gpui::RenderImage>,
+    pub byte_size: usize,
+}
+
+impl CacheablePage for CachedPageImage {
+    fn byte_size(&self) -> usize {
+        self.byte_size
+    }
+}
+
 pub struct ImageView {
     image_item: Entity<ImageItem>,
     project: Entity<Project>,
@@ -125,6 +142,7 @@ pub struct ImageView {
     pdf_autoscroll_task: Option<Task<()>>,
     context_menu: Option<(Entity<ContextMenu>, Point<Pixels>, Subscription)>,
     page_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
+    pdf_page_cache: PageLruCache<CachedPageImage>,
 }
 
 struct DisplayedImage {
@@ -253,6 +271,7 @@ impl ImageView {
             pdf_autoscroll_task: None,
             context_menu: None,
             page_bounds: Rc::new(RefCell::new(HashMap::default())),
+            pdf_page_cache: PageLruCache::new(DEFAULT_MEMORY_BUDGET_BYTES),
         }
     }
 
@@ -272,11 +291,13 @@ impl ImageView {
                     .image_metadata
                     .map(|m| (m.width, m.height));
                 self.page_bounds.borrow_mut().clear();
+                self.pdf_page_cache.clear();
                 cx.emit(ImageViewEvent::TitleChanged);
                 cx.notify();
             }
             ImageItemEvent::ReloadNeeded => {
                 self.page_bounds.borrow_mut().clear();
+                self.pdf_page_cache.clear();
                 cx.notify();
             }
         }
@@ -1048,6 +1069,46 @@ impl ImageView {
         let zoom_factor = 1.0 + event.delta;
         self.set_zoom(self.zoom_level * zoom_factor, Some(event.position), cx);
     }
+
+    fn get_or_render_page_image(
+        &mut self,
+        pdf_bytes: &[u8],
+        page_index: usize,
+    ) -> Option<Arc<gpui::RenderImage>> {
+        let key = CacheKey::new(page_index, self.zoom_level, false);
+        if let Some(cached) = self.pdf_page_cache.get(&key) {
+            return Some(cached.image);
+        }
+
+        let engine = PdfiumEngine::new();
+        let options = RasterizerOptions {
+            target_dpi: 144.0,
+            zoom_factor: self.zoom_level,
+            dark_mode: false,
+            saturation_threshold: 0.18,
+        };
+
+        if let Ok(rendered) = engine.render_page_from_bytes(pdf_bytes, page_index, options) {
+            let byte_size = rendered.byte_size();
+            if let Some(img_buf) = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
+                rendered.width,
+                rendered.height,
+                rendered.rgba_buffer.as_ref().clone(),
+            ) {
+                let render_image = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(img_buf)]));
+                self.pdf_page_cache.insert(
+                    key,
+                    CachedPageImage {
+                        image: render_image.clone(),
+                        byte_size,
+                    },
+                );
+                return Some(render_image);
+            }
+        }
+
+        None
+    }
 }
 
 struct ImageContentElement {
@@ -1361,6 +1422,7 @@ impl Item for ImageView {
             pdf_autoscroll_task: None,
             context_menu: None,
             page_bounds: Rc::new(RefCell::new(HashMap::default())),
+            pdf_page_cache: PageLruCache::new(DEFAULT_MEMORY_BUDGET_BYTES),
         })))
     }
 
@@ -1470,6 +1532,32 @@ impl Render for ImageView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pdf_info = self.image_item.read(cx).pdf_info.clone();
 
+        let mut page_images: HashMap<usize, Arc<gpui::RenderImage>> = HashMap::default();
+        if let Some(ref info) = pdf_info {
+            if !info.pages.is_empty() {
+                for page in &info.pages {
+                    if let Some(img) = &page.image {
+                        page_images.insert(page.page_index, img.clone());
+                    }
+                }
+                if !info.pdf_bytes.is_empty() {
+                    let total_pages = info.total_pages;
+                    let top_item = self.pdf_scroll_handle.top_item();
+                    let bottom_item = self.pdf_scroll_handle.bottom_item();
+                    let visible_start = top_item.saturating_sub(1);
+                    let visible_end = (bottom_item.max(top_item + 1) + 1).min(total_pages.saturating_sub(1));
+
+                    for page_idx in visible_start..=visible_end {
+                        if !page_images.contains_key(&page_idx) {
+                            if let Some(img) = self.get_or_render_page_image(&info.pdf_bytes, page_idx) {
+                                page_images.insert(page_idx, img);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         div()
             .track_focus(&self.focus_handle(cx))
             .key_context("ImageViewer")
@@ -1544,7 +1632,7 @@ impl Render for ImageView {
                                 .items_center()
                                 .py_6()
                                 .gap_8()
-                                .children(pdf_info.pages.into_iter().map(|page| {
+                                .children(pdf_info.pages.into_iter().map(|mut page| {
                                     let page_w = px(page.width as f32 * zoom_level);
                                     let page_h = px(page.height as f32 * zoom_level);
                                     let page_w_val = page.width as f32 * zoom_level;
@@ -1553,6 +1641,7 @@ impl Render for ImageView {
                                     let segments_arc = Arc::new(page.text_segments);
                                     let links = page.links;
                                     let pdf_selection = self.pdf_selection.clone();
+                                    let page_img = page_images.remove(&page_idx).or_else(|| page.image.take());
 
                                     v_flex()
                                         .id(("pdf-page-container", page_idx))
@@ -1584,12 +1673,12 @@ impl Render for ImageView {
                                                         this.handle_pdf_canvas_right_click(page_idx, event.position, window, cx);
                                                     }),
                                                 )
-                                                .child(
-                                                    img(page.image)
+                                                .children(page_img.map(|img_source| {
+                                                    img(img_source)
                                                         .id(("pdf-page-img", page_idx))
                                                         .size_full()
-                                                        .absolute(),
-                                                )
+                                                        .absolute()
+                                                }))
                                                 .child({
                                                     let page_bounds = self.page_bounds.clone();
                                                     let seg_range = pdf_selection.as_ref().and_then(|sel| {
@@ -2428,7 +2517,7 @@ mod tests {
                 page_index: 0,
                 width: 100,
                 height: 100,
-                image: dummy_img.clone(),
+                image: Some(dummy_img.clone()),
                 page_text: "Hello world".into(),
                 text_segments: vec![
                     PdfTextSegment { text: "Hello".into(), x: 0., y: 0., width: 10., height: 10. },
@@ -2440,7 +2529,7 @@ mod tests {
                 page_index: 1,
                 width: 100,
                 height: 100,
-                image: dummy_img,
+                image: Some(dummy_img),
                 page_text: "from page two".into(),
                 text_segments: vec![
                     PdfTextSegment { text: "from".into(), x: 0., y: 0., width: 10., height: 10. },
@@ -2546,6 +2635,69 @@ mod tests {
 
         // Far away arbitrary whitespace (e.g. bottom margin)
         assert_eq!(ImageView::find_segment_at(&segments, 0.8, 0.8), None);
+    }
+
+    #[test]
+    fn test_pdf_page_cache_by_zoom_bucket() {
+        let mut cache: PageLruCache<CachedPageImage> = PageLruCache::new(1024 * 1024);
+        let dummy_img = Arc::new(gpui::RenderImage::new(Vec::new()));
+
+        let key_100 = CacheKey::new(0, 1.0, false);
+        let key_150 = CacheKey::new(0, 1.5, false);
+
+        assert_ne!(key_100, key_150);
+
+        cache.insert(key_100, CachedPageImage {
+            image: dummy_img.clone(),
+            byte_size: 400_000,
+        });
+        cache.insert(key_150, CachedPageImage {
+            image: dummy_img.clone(),
+            byte_size: 400_000,
+        });
+
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.current_memory_bytes(), 800_000);
+        assert!(cache.get(&key_100).is_some());
+        assert!(cache.get(&key_150).is_some());
+
+        // Exceed budget (1MB = 1,048,576 bytes; 800_000 + 400_000 = 1,200_000 bytes)
+        let key_200 = CacheKey::new(0, 2.0, false);
+        cache.insert(key_200, CachedPageImage {
+            image: dummy_img,
+            byte_size: 400_000,
+        });
+
+        // key_100 should be evicted as the least recently used
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.current_memory_bytes(), 800_000);
+        assert!(cache.get(&key_100).is_none());
+        assert!(cache.get(&key_150).is_some());
+        assert!(cache.get(&key_200).is_some());
+    }
+
+    #[test]
+    fn test_pdf_page_cache_clearing() {
+        let mut cache: PageLruCache<CachedPageImage> = PageLruCache::new(1000);
+        let dummy_img = Arc::new(gpui::RenderImage::new(Vec::new()));
+
+        cache.insert(CacheKey::new(0, 1.0, false), CachedPageImage {
+            image: dummy_img.clone(),
+            byte_size: 300,
+        });
+        cache.insert(CacheKey::new(1, 1.0, false), CachedPageImage {
+            image: dummy_img,
+            byte_size: 300,
+        });
+
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.current_memory_bytes(), 600);
+
+        cache.clear();
+
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.current_memory_bytes(), 0);
+        assert!(cache.is_empty());
     }
 }
 

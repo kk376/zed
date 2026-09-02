@@ -67,17 +67,28 @@ impl RenderedPage {
     }
 }
 
+/// Trait for items stored in an LRU page cache that report their memory footprint.
+pub trait CacheablePage: Clone {
+    fn byte_size(&self) -> usize;
+}
+
+impl CacheablePage for RenderedPage {
+    fn byte_size(&self) -> usize {
+        (self.width as usize) * (self.height as usize) * 4
+    }
+}
+
 /// A Least-Recently-Used (LRU) cache bounded by byte size and item limits.
 #[derive(Debug)]
-pub struct PageLruCache {
+pub struct PageLruCache<T = RenderedPage> {
     max_memory_bytes: usize,
     current_memory_bytes: usize,
     max_pages: Option<usize>,
-    entries: HashMap<CacheKey, RenderedPage>,
+    entries: HashMap<CacheKey, T>,
     lru_order: VecDeque<CacheKey>,
 }
 
-impl PageLruCache {
+impl<T: CacheablePage> PageLruCache<T> {
     /// Creates a new cache with the specified memory budget in bytes.
     pub fn new(max_memory_bytes: usize) -> Self {
         Self {
@@ -96,7 +107,7 @@ impl PageLruCache {
     }
 
     /// Retrieves a cached page, refreshing its LRU position.
-    pub fn get(&mut self, key: &CacheKey) -> Option<RenderedPage> {
+    pub fn get(&mut self, key: &CacheKey) -> Option<T> {
         if self.entries.contains_key(key) {
             // Move key to back (most recently used)
             if let Some(pos) = self.lru_order.iter().position(|k| k == key) {
@@ -110,7 +121,7 @@ impl PageLruCache {
     }
 
     /// Inserts a newly rasterized page into the cache, evicting older pages if needed.
-    pub fn insert(&mut self, key: CacheKey, page: RenderedPage) {
+    pub fn insert(&mut self, key: CacheKey, page: T) {
         let page_size = page.byte_size();
 
         // If replacing existing entry, remove old size first
@@ -202,6 +213,12 @@ impl PageLruCache {
     /// Current memory usage in bytes.
     #[inline]
     pub fn memory_usage(&self) -> usize {
+        self.current_memory_bytes
+    }
+
+    /// Total memory in bytes currently consumed by cached pages (alias for `memory_usage`).
+    #[inline]
+    pub fn current_memory_bytes(&self) -> usize {
         self.current_memory_bytes
     }
 
@@ -299,5 +316,33 @@ mod tests {
             "Page 1 was oldest and should be evicted"
         );
         assert!(cache.get(&key2).is_some(), "Page 2 is newly inserted");
+    }
+
+    #[test]
+    fn test_generic_lru_cache_custom_page() {
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        struct MockCustomPage {
+            id: usize,
+            size: usize,
+        }
+
+        impl CacheablePage for MockCustomPage {
+            fn byte_size(&self) -> usize {
+                self.size
+            }
+        }
+
+        let mut cache: PageLruCache<MockCustomPage> = PageLruCache::new(1024 * 1024);
+        let key0 = CacheKey::new(0, 1.0, false);
+        let key1 = CacheKey::new(1, 1.0, false);
+
+        cache.insert(key0, MockCustomPage { id: 100, size: 600_000 });
+        cache.insert(key1, MockCustomPage { id: 101, size: 600_000 });
+
+        // Total 1.2 MB > 1 MB, key0 must be evicted
+        assert!(cache.get(&key0).is_none());
+        assert_eq!(cache.get(&key1), Some(MockCustomPage { id: 101, size: 600_000 }));
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.memory_usage(), 600_000);
     }
 }

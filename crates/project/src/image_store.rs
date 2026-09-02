@@ -121,7 +121,7 @@ pub struct PdfPageEntry {
     pub page_index: usize,
     pub width: u32,
     pub height: u32,
-    pub image: Arc<gpui::RenderImage>,
+    pub image: Option<Arc<gpui::RenderImage>>,
     pub links: Vec<kkpdf_zed::PdfLinkAnnotation>,
     pub text_segments: Vec<kkpdf_zed::PdfTextSegment>,
     pub page_text: String,
@@ -1123,39 +1123,35 @@ pub fn create_gpui_images_from_pdf(
     pdf_bytes: &[u8],
 ) -> anyhow::Result<(Vec<PdfPageEntry>, Option<String>)> {
     let engine = kkpdf_zed::PdfiumEngine::new();
-    let options = kkpdf_zed::rasterizer::RasterizerOptions {
-        target_dpi: 144.0,
-        zoom_factor: 1.0,
-        dark_mode: false,
-        saturation_threshold: 0.18,
-    };
+    let details = engine.extract_document_details(pdf_bytes)?;
 
-    let doc_res = engine.render_and_extract_document_from_bytes(pdf_bytes, options)?;
-    let mut pages = Vec::with_capacity(doc_res.pages.len());
-
-    for page in doc_res.pages {
-        let img_buf = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
-            page.width,
-            page.height,
-            page.rgba_buffer,
-        )
-        .ok_or_else(|| anyhow::anyhow!("Failed to convert RGBA to ImageBuffer"))?;
-
-        let render_image = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(img_buf)]));
-
+    let mut pages = Vec::with_capacity(details.pages.len());
+    for page in details.pages {
         pages.push(PdfPageEntry {
             page_index: page.page_index,
-            width: page.width,
-            height: page.height,
-            image: render_image,
+            width: (page.width_pt.round() as u32).max(1),
+            height: (page.height_pt.round() as u32).max(1),
+            image: None,
             links: page.links,
             text_segments: page.text_segments,
             page_text: page.text,
         });
     }
 
-    let full_text = if !doc_res.full_text.is_empty() {
-        Some(doc_res.full_text)
+    if pages.is_empty() && pdf_bytes.starts_with(b"%PDF-") {
+        pages.push(PdfPageEntry {
+            page_index: 0,
+            width: 612,
+            height: 792,
+            image: None,
+            links: Vec::new(),
+            text_segments: Vec::new(),
+            page_text: String::new(),
+        });
+    }
+
+    let full_text = if !details.full_text.is_empty() {
+        Some(details.full_text)
     } else {
         None
     };
@@ -1163,45 +1159,7 @@ pub fn create_gpui_images_from_pdf(
     Ok((pages, full_text))
 }
 
-pub fn create_gpui_image_from_pdf_page(
-    pdf_bytes: &[u8],
-    page_index: usize,
-) -> anyhow::Result<(Arc<gpui::Image>, u32, u32)> {
-    let engine = kkpdf_zed::pdfium::PdfiumEngine::new();
-    let options = kkpdf_zed::rasterizer::RasterizerOptions {
-        target_dpi: 144.0,
-        zoom_factor: 1.0,
-        dark_mode: false,
-        saturation_threshold: 0.18,
-    };
-    let page = engine.render_page_from_bytes(pdf_bytes, page_index, options)?;
-
-    let mut png_bytes: Vec<u8> = Vec::new();
-    let mut cursor = std::io::Cursor::new(&mut png_bytes);
-    let img_buf = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
-        page.width,
-        page.height,
-        page.rgba_buffer.as_ref().clone(),
-    )
-    .ok_or_else(|| anyhow::anyhow!("Failed to convert RGBA to ImageBuffer"))?;
-
-    img_buf.write_to(&mut cursor, image::ImageFormat::Png)?;
-    Ok((
-        Arc::new(gpui::Image::from_bytes(
-            gpui::ImageFormat::Png,
-            png_bytes,
-        )),
-        page.width,
-        page.height,
-    ))
-}
-
 fn create_gpui_image(content: Vec<u8>) -> anyhow::Result<Arc<gpui::Image>> {
-    if content.starts_with(b"%PDF-") {
-        let (img, _, _) = create_gpui_image_from_pdf_page(&content, 0)?;
-        return Ok(img);
-    }
-
     let format = image::guess_format(&content)?;
 
     Ok(Arc::new(gpui::Image::from_bytes(

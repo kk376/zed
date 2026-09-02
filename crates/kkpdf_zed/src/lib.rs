@@ -19,7 +19,7 @@ pub mod ui;
 pub mod view;
 pub mod watcher;
 
-pub use cache::{CacheKey, PageLruCache, RenderedPage, DEFAULT_MEMORY_BUDGET_BYTES};
+pub use cache::{CacheKey, CacheablePage, PageLruCache, RenderedPage, DEFAULT_MEMORY_BUDGET_BYTES};
 pub use document::{PageDimensions, PdfDocument};
 pub use pdfium::{
     PdfDocumentDetails, PdfLinkAnnotation, PdfPageDetails, PdfTextSegment, PdfiumEngine,
