@@ -33,6 +33,30 @@ static GLOBAL_PDFIUM: OnceLock<Arc<Mutex<SerializedPdfium>>> = OnceLock::new();
 /// preventing out-of-memory denial of service attacks from malicious documents.
 pub const MAX_PAGE_DIMENSION: f32 = 8192.0;
 
+/// Computes target pixel dimensions preserving the page aspect ratio,
+/// scaling down uniformly if either dimension exceeds `MAX_PAGE_DIMENSION`.
+pub(crate) fn compute_target_dimensions(
+    page_width_pts: f32,
+    page_height_pts: f32,
+    dpi: f32,
+    zoom: f32,
+) -> (i32, i32) {
+    let scale_factor = (dpi / 72.0) * zoom;
+    let raw_w = (page_width_pts * scale_factor).max(1.0);
+    let raw_h = (page_height_pts * scale_factor).max(1.0);
+
+    let clamp_scale = if raw_w > MAX_PAGE_DIMENSION || raw_h > MAX_PAGE_DIMENSION {
+        (MAX_PAGE_DIMENSION / raw_w).min(MAX_PAGE_DIMENSION / raw_h)
+    } else {
+        1.0
+    };
+
+    let target_w = (raw_w * clamp_scale).round().clamp(1.0, MAX_PAGE_DIMENSION) as i32;
+    let target_h = (raw_h * clamp_scale).round().clamp(1.0, MAX_PAGE_DIMENSION) as i32;
+
+    (target_w, target_h)
+}
+
 /// Thread-safe wrapper around a Pdfium instance.
 #[derive(Clone)]
 pub struct PdfiumEngine {
@@ -176,14 +200,12 @@ impl PdfiumEngine {
                 .get(page_index as u16)
                 .context("Requested page index out of bounds")?;
 
-            let target_width =
-                (page.width().value * (options.target_dpi / 72.0) * options.zoom_factor)
-                    .round()
-                    .clamp(1.0, MAX_PAGE_DIMENSION) as i32;
-            let target_height =
-                (page.height().value * (options.target_dpi / 72.0) * options.zoom_factor)
-                    .round()
-                    .clamp(1.0, MAX_PAGE_DIMENSION) as i32;
+            let (target_width, target_height) = compute_target_dimensions(
+                page.width().value,
+                page.height().value,
+                options.target_dpi,
+                options.zoom_factor,
+            );
 
             let render_config = PdfRenderConfig::new()
                 .set_target_width(target_width)
@@ -236,14 +258,12 @@ impl PdfiumEngine {
 
             let mut rendered_pages = Vec::with_capacity(total_pages);
             for (idx, page) in doc.pages().iter().enumerate() {
-                let target_width =
-                    (page.width().value * (options.target_dpi / 72.0) * options.zoom_factor)
-                        .round()
-                        .clamp(1.0, MAX_PAGE_DIMENSION) as i32;
-                let target_height =
-                    (page.height().value * (options.target_dpi / 72.0) * options.zoom_factor)
-                        .round()
-                        .clamp(1.0, MAX_PAGE_DIMENSION) as i32;
+                let (target_width, target_height) = compute_target_dimensions(
+                    page.width().value,
+                    page.height().value,
+                    options.target_dpi,
+                    options.zoom_factor,
+                );
 
                 let render_config = PdfRenderConfig::new()
                     .set_target_width(target_width)
@@ -874,12 +894,12 @@ impl PdfiumEngine {
                 let page_w = page.width().value;
                 let page_h = page.height().value;
 
-                let target_width = (page_w * (options.target_dpi / 72.0) * options.zoom_factor)
-                    .round()
-                    .clamp(1.0, MAX_PAGE_DIMENSION) as i32;
-                let target_height = (page_h * (options.target_dpi / 72.0) * options.zoom_factor)
-                    .round()
-                    .clamp(1.0, MAX_PAGE_DIMENSION) as i32;
+                let (target_width, target_height) = compute_target_dimensions(
+                    page_w,
+                    page_h,
+                    options.target_dpi,
+                    options.zoom_factor,
+                );
 
                 let render_config = PdfRenderConfig::new()
                     .set_target_width(target_width)
@@ -1030,5 +1050,16 @@ mod tests {
         let tiny_dim: f32 = -50.0;
         let clamped_tiny = tiny_dim.clamp(1.0, MAX_PAGE_DIMENSION);
         assert_eq!(clamped_tiny, 1.0);
+
+        // Verify uniform aspect ratio scaling under extreme dimensions
+        let (w, h) = compute_target_dimensions(10_000.0, 2_000.0, 72.0, 1.0);
+        assert_eq!(w, 8192);
+        assert_eq!(h, 1638);
+        assert!(((w as f32 / h as f32) - 5.0).abs() < 0.01);
+
+        let (w2, h2) = compute_target_dimensions(2_000.0, 10_000.0, 72.0, 1.0);
+        assert_eq!(w2, 1638);
+        assert_eq!(h2, 8192);
+        assert!(((h2 as f32 / w2 as f32) - 5.0).abs() < 0.01);
     }
 }

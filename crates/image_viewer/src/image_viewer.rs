@@ -181,6 +181,7 @@ impl ImageView {
                 previous.drop_atlas_entry(window);
             } else {
                 previous.release(window, cx);
+                self.page_bounds.borrow_mut().clear();
             }
         }
 
@@ -270,10 +271,14 @@ impl ImageView {
                     .read(cx)
                     .image_metadata
                     .map(|m| (m.width, m.height));
+                self.page_bounds.borrow_mut().clear();
                 cx.emit(ImageViewEvent::TitleChanged);
                 cx.notify();
             }
-            ImageItemEvent::ReloadNeeded => {}
+            ImageItemEvent::ReloadNeeded => {
+                self.page_bounds.borrow_mut().clear();
+                cx.notify();
+            }
         }
     }
 
@@ -375,8 +380,8 @@ impl ImageView {
     fn ensure_pdf_selection_text(&mut self, cx: &mut Context<Self>) {
         if let Some(ref mut sel) = self.pdf_selection {
             if sel.text.is_empty() {
-                let pdf_info = self.image_item.read(cx).pdf_info.clone();
-                if let Some(pdf_info) = pdf_info {
+                let item = self.image_item.read(cx);
+                if let Some(ref pdf_info) = item.pdf_info {
                     sel.text = Self::collect_selection_text(
                         &pdf_info.pages,
                         sel.start_page,
@@ -394,19 +399,13 @@ impl ImageView {
         if let Some(ref sel) = self.pdf_selection {
             if !sel.text.is_empty() {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(sel.text.clone()));
-                return;
-            }
-        }
-        if let Some(text) = self.image_item.read(cx).extract_text() {
-            if !text.is_empty() {
-                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
             }
         }
     }
 
     fn select_all(&mut self, _: &SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
-        let pdf_info = self.image_item.read(cx).pdf_info.clone();
-        if let Some(pdf_info) = pdf_info {
+        let item = self.image_item.read(cx);
+        if let Some(ref pdf_info) = item.pdf_info {
             let cur_page = self.pdf_scroll_handle.top_item();
             let target_page = self
                 .pdf_selection
@@ -441,12 +440,7 @@ impl ImageView {
             .as_ref()
             .is_some_and(|s| !s.text.is_empty());
         let is_pdf = self.image_item.read(cx).is_pdf();
-        let has_doc_text = self
-            .image_item
-            .read(cx)
-            .extract_text()
-            .is_some_and(|t| !t.is_empty());
-        let can_copy = has_selection || has_doc_text;
+        let can_copy = has_selection;
         let focus_handle = self.focus_handle.clone();
 
         let context_menu = ContextMenu::build(window, cx, move |menu, _, _| {
@@ -496,7 +490,8 @@ impl ImageView {
             }
         }
 
-        // 2. Line-level hit with horizontal proximity
+        // 2. Line-level hit with horizontal proximity threshold
+        const MAX_LINE_PROXIMITY: f32 = 0.05;
         let mut closest_on_line: Option<(usize, f32)> = None;
         for (i, seg) in segments.iter().enumerate() {
             let line_top = seg.y - seg.height * 0.2;
@@ -504,7 +499,8 @@ impl ImageView {
             if norm_y >= line_top && norm_y <= line_bottom {
                 let seg_center_x = seg.x + seg.width * 0.5;
                 let dist_x = (norm_x - seg_center_x).abs();
-                if closest_on_line.as_ref().map_or(true, |(_, d)| dist_x < *d) {
+                let allowed_dist = MAX_LINE_PROXIMITY.max(seg.width * 1.5);
+                if dist_x <= allowed_dist && closest_on_line.as_ref().map_or(true, |(_, d)| dist_x < *d) {
                     closest_on_line = Some((i, dist_x));
                 }
             }
@@ -513,13 +509,14 @@ impl ImageView {
             return Some(idx);
         }
 
-        // 3. Closest segment overall
+        // 3. Closest segment overall within strict proximity threshold (within 5% distance)
+        const MAX_OVERALL_DIST_SQ: f32 = 0.05 * 0.05;
         let mut closest: Option<(usize, f32)> = None;
         for (i, seg) in segments.iter().enumerate() {
             let center_x = seg.x + seg.width * 0.5;
             let center_y = seg.y + seg.height * 0.5;
             let dist_sq = (norm_x - center_x).powi(2) + (norm_y - center_y).powi(2);
-            if closest.as_ref().map_or(true, |(_, d)| dist_sq < *d) {
+            if dist_sq <= MAX_OVERALL_DIST_SQ && closest.as_ref().map_or(true, |(_, d)| dist_sq < *d) {
                 closest = Some((i, dist_sq));
             }
         }
@@ -670,8 +667,8 @@ impl ImageView {
     }
 
     fn update_pdf_drag_selection(&mut self, cursor_pos: Point<Pixels>, cx: &mut Context<Self>) {
-        let pdf_info = self.image_item.read(cx).pdf_info.clone();
-        let Some(ref pdf_info) = pdf_info else { return; };
+        let item = self.image_item.read(cx);
+        let Some(ref pdf_info) = item.pdf_info else { return; };
         if let Some((page_idx, seg_idx)) = self.find_page_and_segment_at(cursor_pos, pdf_info) {
             if let Some(ref mut sel) = self.pdf_selection {
                 if sel.end_page != page_idx || sel.end_seg != seg_idx {
@@ -809,8 +806,8 @@ impl ImageView {
         cx: &mut Context<Self>,
     ) {
         let bounds = self.page_bounds.borrow().get(&page_index).copied();
-        let pdf_info = self.image_item.read(cx).pdf_info.clone();
-        let Some(pdf_info) = pdf_info else { return; };
+        let item = self.image_item.read(cx);
+        let Some(ref pdf_info) = item.pdf_info else { return; };
         let Some(page) = pdf_info.pages.iter().find(|p| p.page_index == page_index) else { return; };
 
         if click_count >= 3 {
@@ -891,8 +888,8 @@ impl ImageView {
                 let norm_x = ((p_x - b_ox) / b_w).clamp(0.0, 1.0);
                 let norm_y = ((p_y - b_oy) / b_h).clamp(0.0, 1.0);
 
-                let pdf_info = self.image_item.read(cx).pdf_info.clone();
-                if let Some(pdf_info) = pdf_info {
+                let item = self.image_item.read(cx);
+                if let Some(ref pdf_info) = item.pdf_info {
                     if let Some(page) = pdf_info.pages.iter().find(|p| p.page_index == page_index) {
                         if let Some(seg_idx) = Self::find_segment_at(&page.text_segments, norm_x, norm_y) {
                             let need_select = self.pdf_selection.as_ref().map_or(true, |s| {
@@ -1115,7 +1112,17 @@ impl Element for ImageContentElement {
         let image_view = self.image_view.read(cx);
         let image = image_view.image_item.read(cx).image.clone();
 
-        let zoom_level = image_view.zoom_level;
+        let first_layout = image_view.container_bounds.is_none();
+
+        let initial_zoom_level = first_layout
+            .then(|| {
+                image_view
+                    .image_size
+                    .map(|image_size| ImageView::compute_fit_to_view_zoom(bounds, image_size))
+            })
+            .flatten();
+
+        let zoom_level = initial_zoom_level.unwrap_or(image_view.zoom_level);
 
         let pan_offset = image_view.pan_offset;
         let border_color = cx.theme().colors().border;
@@ -1145,6 +1152,9 @@ impl Element for ImageContentElement {
             let render_image = image.clone().use_render_image(window, cx);
             this.update_displayed_image(&image, render_image, window, cx);
             this.container_bounds = Some(bounds);
+            if let Some(initial_zoom_level) = initial_zoom_level {
+                this.zoom_level = initial_zoom_level;
+            }
         });
 
         let mut image_content = div()
@@ -1342,7 +1352,7 @@ impl Item for ImageView {
             pending_image: None,
             displayed_image: None,
             pdf_scroll_handle: gpui::ScrollHandle::new(),
-            show_text_panel: self.show_text_panel,
+            show_text_panel: false,
             text_buffer: None,
             text_editor: None,
             pdf_selection: self.pdf_selection.clone(),
@@ -2511,6 +2521,31 @@ mod tests {
         assert!(!ImageView::is_safe_pdf_url("shell:launch"));
         assert!(!ImageView::is_safe_pdf_url("powershell:something"));
         assert!(!ImageView::is_safe_pdf_url("ms-msdt:/id DevDiagnostic"));
+    }
+
+    #[test]
+    fn test_find_segment_at_whitespace_rejection() {
+        let segments = vec![
+            kkpdf_zed::PdfTextSegment {
+                text: "Hello".to_string(),
+                x: 0.2,
+                y: 0.2,
+                width: 0.1,
+                height: 0.05,
+            },
+        ];
+
+        // Direct hit inside bounding box
+        assert_eq!(ImageView::find_segment_at(&segments, 0.25, 0.22), Some(0));
+
+        // Close horizontal proximity on same line
+        assert_eq!(ImageView::find_segment_at(&segments, 0.31, 0.22), Some(0));
+
+        // Far away horizontal position on same line (> allowed distance)
+        assert_eq!(ImageView::find_segment_at(&segments, 0.7, 0.22), None);
+
+        // Far away arbitrary whitespace (e.g. bottom margin)
+        assert_eq!(ImageView::find_segment_at(&segments, 0.8, 0.8), None);
     }
 }
 
