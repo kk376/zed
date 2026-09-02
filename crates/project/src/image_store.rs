@@ -122,8 +122,8 @@ pub struct PdfPageEntry {
     pub width: u32,
     pub height: u32,
     pub image: Option<Arc<gpui::RenderImage>>,
-    pub links: Vec<kkpdf_zed::PdfLinkAnnotation>,
-    pub text_segments: Vec<kkpdf_zed::PdfTextSegment>,
+    pub links: Vec<pdf_viewer::PdfLinkAnnotation>,
+    pub text_segments: Vec<pdf_viewer::PdfTextSegment>,
     pub page_text: String,
 }
 
@@ -178,9 +178,9 @@ pub fn project_image_source(project: WeakEntity<Project>, path: ProjectPath) -> 
 impl ImageItem {
     pub fn compute_metadata_from_bytes(image_bytes: &[u8]) -> Result<ImageMetadata> {
         if image_bytes.starts_with(b"%PDF-") {
-            let engine = kkpdf_zed::pdfium::PdfiumEngine::new();
+            let engine = pdf_viewer::pdfium::PdfiumEngine::new();
             let doc = engine.load_document_from_bytes(image_bytes, None)?;
-            let dim = doc.page_size(0).unwrap_or(kkpdf_zed::PageDimensions::new(612.0, 792.0));
+            let dim = doc.page_size(0).unwrap_or(pdf_viewer::PageDimensions::new(612.0, 792.0));
             let (width, height) = dim.to_pixel_size(1.0, 144.0);
             return Ok(ImageMetadata {
                 width,
@@ -278,7 +278,7 @@ impl ImageItem {
         if let Some(ref text) = info.full_text {
             Some(text.clone())
         } else {
-            kkpdf_zed::PdfiumEngine::new().extract_text_from_bytes(&info.pdf_bytes, None).ok()
+            pdf_viewer::PdfiumEngine::new().extract_text_from_bytes(&info.pdf_bytes, None).ok()
         }
     }
 
@@ -1122,7 +1122,7 @@ impl LocalImageStore {
 pub fn create_gpui_images_from_pdf(
     pdf_bytes: &[u8],
 ) -> anyhow::Result<(Vec<PdfPageEntry>, Option<String>)> {
-    let engine = kkpdf_zed::PdfiumEngine::new();
+    let engine = pdf_viewer::PdfiumEngine::new();
     let details = engine.extract_document_details(pdf_bytes)?;
 
     let mut pages = Vec::with_capacity(details.pages.len());
@@ -1138,16 +1138,8 @@ pub fn create_gpui_images_from_pdf(
         });
     }
 
-    if pages.is_empty() && pdf_bytes.starts_with(b"%PDF-") {
-        pages.push(PdfPageEntry {
-            page_index: 0,
-            width: 612,
-            height: 792,
-            image: None,
-            links: Vec::new(),
-            text_segments: Vec::new(),
-            page_text: String::new(),
-        });
+    if pages.is_empty() {
+        anyhow::bail!("Failed to parse PDF document: no pages found or Pdfium engine unavailable");
     }
 
     let full_text = if !details.full_text.is_empty() {

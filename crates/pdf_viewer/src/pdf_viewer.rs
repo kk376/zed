@@ -1,12 +1,12 @@
-//! # `kkpdf-zed`
+//! # `pdf_viewer`
 //!
-//! High-performance native PDF viewing engine and GPUI workspace item for Zed Editor.
+//! High performance native PDF viewing engine and GPUI workspace item for Zed Editor.
 //!
 //! Features:
-//! - Sub-millisecond viewport rendering via bounded LRU memory caching
-//! - Smart luminosity-threshold dark mode tone mapping preserving saturated colors
-//! - Continuous multi-page scroll, single-page, and two-page spread layouts
-//! - Precision focal-point zoom (10% to 2000%) with mouse and gesture support
+//! - High performance viewport rendering via bounded LRU memory caching
+//! - Smart luminosity threshold dark mode tone mapping preserving saturated colors
+//! - Continuous multi page scroll, single page, and two page spread layouts
+//! - Precision focal point zoom (10% to 2000%) with mouse and gesture support
 //! - Debounced disk change watcher preserving exact scroll percentages and zoom levels
 //! - Native Pdfium C++ engine bindings with robust fallback support
 

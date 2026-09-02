@@ -61,7 +61,6 @@ globset.workspace = true
 gpui.workspace = true
 http_client = { workspace = true, features = ["github-download"] }
 image.workspace = true
-kkpdf-zed.workspace = true
 indexmap.workspace = true
 itertools.workspace = true
 language.workspace = true
@@ -72,6 +71,7 @@ node_runtime.workspace = true
 parking_lot.workspace = true
 path.workspace = true
 paths.workspace = true
+pdf_viewer.workspace = true
 percent-encoding.workspace = true
 postage.workspace = true
 prettier.workspace = true

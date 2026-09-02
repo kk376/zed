@@ -496,6 +496,25 @@ pub struct PdfDocumentRenderResult {
     pub pages: Vec<PdfPageRenderResult>,
 }
 
+#[inline]
+fn normalize_coordinates(
+    left: f32,
+    right: f32,
+    bottom: f32,
+    top: f32,
+    page_w: f32,
+    page_h: f32,
+) -> (f32, f32, f32, f32) {
+    if page_w <= 0.0 || page_h <= 0.0 {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    let norm_x = (left / page_w).clamp(0.0, 1.0);
+    let norm_y = ((page_h - top) / page_h).clamp(0.0, 1.0);
+    let norm_w = ((right - left) / page_w).clamp(0.0, 1.0);
+    let norm_h = ((top - bottom) / page_h).clamp(0.0, 1.0);
+    (norm_x, norm_y, norm_w, norm_h)
+}
+
 fn extract_page_text_and_links(
     page: &pdfium_render::prelude::PdfPage,
     idx: usize,
@@ -534,26 +553,8 @@ fn extract_page_text_and_links(
                 let bottom = bounds.bottom().value.min(bounds.top().value);
                 let top = bounds.bottom().value.max(bounds.top().value);
 
-                let norm_x = if page_w > 0.0 {
-                    (left / page_w).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                let norm_y = if page_h > 0.0 {
-                    ((page_h - top) / page_h).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                let norm_w = if page_w > 0.0 {
-                    ((right - left) / page_w).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                let norm_h = if page_h > 0.0 {
-                    ((top - bottom) / page_h).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
+                let (norm_x, norm_y, norm_w, norm_h) =
+                    normalize_coordinates(left, right, bottom, top, page_w, page_h);
 
                 if norm_w > 0.0 && norm_h > 0.0 {
                     segments.push(PdfTextSegment {
@@ -581,26 +582,9 @@ fn extract_page_text_and_links(
 
                     if is_ws {
                         if has_word_char && !word_text.is_empty() {
-                            let norm_x = if page_w > 0.0 {
-                                (min_left / page_w).clamp(0.0, 1.0)
-                            } else {
-                                0.0
-                            };
-                            let norm_y = if page_h > 0.0 {
-                                ((page_h - max_top) / page_h).clamp(0.0, 1.0)
-                            } else {
-                                0.0
-                            };
-                            let norm_w = if page_w > 0.0 {
-                                ((max_right - min_left) / page_w).clamp(0.0, 1.0)
-                            } else {
-                                0.0
-                            };
-                            let norm_h = if page_h > 0.0 {
-                                ((max_top - min_bottom) / page_h).clamp(0.0, 1.0)
-                            } else {
-                                0.0
-                            };
+                            let (norm_x, norm_y, norm_w, norm_h) = normalize_coordinates(
+                                min_left, max_right, min_bottom, max_top, page_w, page_h,
+                            );
 
                             if norm_w > 0.0 && norm_h > 0.0 {
                                 segments.push(PdfTextSegment {
@@ -636,26 +620,9 @@ fn extract_page_text_and_links(
                 }
 
                 if has_word_char && !word_text.is_empty() {
-                    let norm_x = if page_w > 0.0 {
-                        (min_left / page_w).clamp(0.0, 1.0)
-                    } else {
-                        0.0
-                    };
-                    let norm_y = if page_h > 0.0 {
-                        ((page_h - max_top) / page_h).clamp(0.0, 1.0)
-                    } else {
-                        0.0
-                    };
-                    let norm_w = if page_w > 0.0 {
-                        ((max_right - min_left) / page_w).clamp(0.0, 1.0)
-                    } else {
-                        0.0
-                    };
-                    let norm_h = if page_h > 0.0 {
-                        ((max_top - min_bottom) / page_h).clamp(0.0, 1.0)
-                    } else {
-                        0.0
-                    };
+                    let (norm_x, norm_y, norm_w, norm_h) = normalize_coordinates(
+                        min_left, max_right, min_bottom, max_top, page_w, page_h,
+                    );
 
                     if norm_w > 0.0 && norm_h > 0.0 {
                         segments.push(PdfTextSegment {
@@ -674,26 +641,8 @@ fn extract_page_text_and_links(
                 let bottom = bounds.bottom().value.min(bounds.top().value);
                 let top = bounds.bottom().value.max(bounds.top().value);
 
-                let norm_x = if page_w > 0.0 {
-                    (left / page_w).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                let norm_y = if page_h > 0.0 {
-                    ((page_h - top) / page_h).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                let norm_w = if page_w > 0.0 {
-                    ((right - left) / page_w).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                let norm_h = if page_h > 0.0 {
-                    ((top - bottom) / page_h).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
+                let (norm_x, norm_y, norm_w, norm_h) =
+                    normalize_coordinates(left, right, bottom, top, page_w, page_h);
 
                 segments.push(PdfTextSegment {
                     text: seg_trimmed.to_string(),
@@ -718,26 +667,8 @@ fn extract_page_text_and_links(
                         let bottom = rect.bottom().value.min(rect.top().value);
                         let top = rect.bottom().value.max(rect.top().value);
 
-                        let norm_x = if page_w > 0.0 {
-                            (left / page_w).clamp(0.0, 1.0)
-                        } else {
-                            0.0
-                        };
-                        let norm_y = if page_h > 0.0 {
-                            ((page_h - top) / page_h).clamp(0.0, 1.0)
-                        } else {
-                            0.0
-                        };
-                        let norm_w = if page_w > 0.0 {
-                            ((right - left) / page_w).clamp(0.0, 1.0)
-                        } else {
-                            0.0
-                        };
-                        let norm_h = if page_h > 0.0 {
-                            ((top - bottom) / page_h).clamp(0.0, 1.0)
-                        } else {
-                            0.0
-                        };
+                        let (norm_x, norm_y, norm_w, norm_h) =
+                            normalize_coordinates(left, right, bottom, top, page_w, page_h);
 
                         links.push(PdfLinkAnnotation {
                             url: url_clean,
@@ -766,26 +697,8 @@ fn extract_page_text_and_links(
                                 let bottom = rect.bottom().value.min(rect.top().value);
                                 let top = rect.bottom().value.max(rect.top().value);
 
-                                let norm_x = if page_w > 0.0 {
-                                    (left / page_w).clamp(0.0, 1.0)
-                                } else {
-                                    0.0
-                                };
-                                let norm_y = if page_h > 0.0 {
-                                    ((page_h - top) / page_h).clamp(0.0, 1.0)
-                                } else {
-                                    0.0
-                                };
-                                let norm_w = if page_w > 0.0 {
-                                    ((right - left) / page_w).clamp(0.0, 1.0)
-                                } else {
-                                    0.0
-                                };
-                                let norm_h = if page_h > 0.0 {
-                                    ((top - bottom) / page_h).clamp(0.0, 1.0)
-                                } else {
-                                    0.0
-                                };
+                                let (norm_x, norm_y, norm_w, norm_h) =
+                                    normalize_coordinates(left, right, bottom, top, page_w, page_h);
 
                                 let exists = links.iter().any(|l| {
                                     l.url == url_clean

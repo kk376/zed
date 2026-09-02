@@ -1,4 +1,4 @@
-//! PDF viewer toolbar control models and layout definitions.
+//! User interface components and toolbar state models for PDF viewing.
 //!
 //! Provides navigation, zoom presets, page jump controls, and dark mode toggles.
 

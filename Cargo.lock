@@ -8760,10 +8760,10 @@ dependencies = [
  "fs",
  "gpui",
  "image",
- "kkpdf-zed",
  "language",
  "log",
  "menu",
+ "pdf_viewer",
  "project",
  "settings",
  "theme",
@@ -9445,20 +9445,6 @@ name = "khronos_api"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
-
-[[package]]
-name = "kkpdf-zed"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "image",
- "log",
- "parking_lot",
- "pdfium-render",
- "serde",
- "serde_json",
- "tempfile",
-]
 
 [[package]]
 name = "kqueue"
@@ -12741,6 +12727,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0008e816fcdaf229cdd540e9b6ca2dc4a10d65c31624abb546c6420a02846e61"
 
 [[package]]
+name = "pdf_viewer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "image",
+ "log",
+ "parking_lot",
+ "pdfium-render",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "pdfium-render"
 version = "0.8.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13959,7 +13959,6 @@ dependencies = [
  "image",
  "indexmap 2.14.0",
  "itertools 0.14.0",
- "kkpdf-zed",
  "language",
  "log",
  "lsp",
@@ -13968,6 +13967,7 @@ dependencies = [
  "parking_lot",
  "path",
  "paths",
+ "pdf_viewer",
  "percent-encoding",
  "postage",
  "prettier",

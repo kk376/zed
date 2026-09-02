@@ -23,7 +23,7 @@ use project::{
     ImageItem, Project, ProjectPath, git_store::GitStoreEvent,
     image_store::{ImageItemEvent, PdfPageEntry, PdfPageInfo},
 };
-use kkpdf_zed::{
+use pdf_viewer::{
     cache::{CacheKey, CacheablePage, PageLruCache, DEFAULT_MEMORY_BUDGET_BYTES},
     rasterizer::RasterizerOptions,
     PdfiumEngine,
@@ -492,7 +492,7 @@ impl ImageView {
     }
 
     fn find_segment_at(
-        segments: &[kkpdf_zed::PdfTextSegment],
+        segments: &[pdf_viewer::PdfTextSegment],
         norm_x: f32,
         norm_y: f32,
     ) -> Option<usize> {
@@ -1774,7 +1774,7 @@ impl Render for ImageView {
                         .custom_scrollbars(
                             Scrollbars::new(ScrollAxes::Vertical)
                                 .id("pdf-scrollbar")
-                                .style(ScrollbarStyle::Thick)
+                                .style(ScrollbarStyle::Editor)
                                 .tracked_scroll_handle(&self.pdf_scroll_handle)
                                 .notify_content(),
                             window,
@@ -2508,7 +2508,7 @@ mod tests {
 
     #[test]
     fn test_pdf_collect_selection_text_multi_page() {
-        use kkpdf_zed::PdfTextSegment;
+        use pdf_viewer::PdfTextSegment;
 
         let dummy_img = Arc::new(gpui::RenderImage::new(Vec::new()));
 
@@ -2615,7 +2615,7 @@ mod tests {
     #[test]
     fn test_find_segment_at_whitespace_rejection() {
         let segments = vec![
-            kkpdf_zed::PdfTextSegment {
+            pdf_viewer::PdfTextSegment {
                 text: "Hello".to_string(),
                 x: 0.2,
                 y: 0.2,
