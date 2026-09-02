@@ -1548,9 +1548,9 @@ impl Render for ImageView {
                     let visible_end = (bottom_item.max(top_item + 1) + 1).min(total_pages.saturating_sub(1));
 
                     for page_idx in visible_start..=visible_end {
-                        if !page_images.contains_key(&page_idx) {
+                        if let std::collections::hash_map::Entry::Vacant(e) = page_images.entry(page_idx) {
                             if let Some(img) = self.get_or_render_page_image(&info.pdf_bytes, page_idx) {
-                                page_images.insert(page_idx, img);
+                                e.insert(img);
                             }
                         }
                     }
@@ -1695,7 +1695,7 @@ impl Render for ImageView {
                                                             None
                                                         }
                                                     });
-                                                    let segs = segments_arc.clone();
+                                                    let segs = segments_arc;
                                                     canvas(
                                                         move |bounds: Bounds<Pixels>, _window: &mut Window, _cx: &mut App| {
                                                             page_bounds.borrow_mut().insert(page_idx, bounds);
@@ -1734,7 +1734,7 @@ impl Render for ImageView {
                                                     let link_w = px(link.width * page_w_val);
                                                     let link_h = px(link.height * page_h_val);
                                                     let link_url = link.url.clone();
-                                                    let link_url_tooltip = link.url.clone();
+                                                    let link_url_tooltip = link.url;
 
                                                     div()
                                                         .id(("pdf-link", page_idx * 100_000 + link_idx))
